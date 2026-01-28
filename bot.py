@@ -7,9 +7,10 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackCont
 from datetime import datetime
 import signal
 import sys
+import os
 
-# ⚠️ YOUR BOT TOKEN HERE - Replace with your actual bot token
-BOT_TOKEN = "8098475949:AAHZhzAivOXv2lN_GSSMjuP9hXSUHljStiY"
+# ⚠️ Bot Token - Heroku environment variable से भी use कर सकते हैं
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8098475949:AAHZhzAivOXv2lN_GSSMjuP9hXSUHljStiY')
 
 # Store active attacks
 active_attacks = {}
@@ -39,7 +40,7 @@ async def send_attack_request(phone_number, chat_id, context: CallbackContext):
         if response.status_code == 200:
             try:
                 resp_json = response.json()
-                message = f"✅ {timestamp}\n📞 Target: {phone_number}\nStatus: {response.status_code}\nResponse: {json.dumps(resp_json)}"
+                message = f"✅ {timestamp}\n📞 Target: {phone_number}\nStatus: {response.status_code}\nResponse: {json.dumps(resp_json, indent=2)}"
             except:
                 message = f"✅ {timestamp}\n📞 Target: {phone_number}\nStatus: {response.status_code}\nText: {response.text[:200]}"
         else:
@@ -50,7 +51,7 @@ async def send_attack_request(phone_number, chat_id, context: CallbackContext):
         
     except Exception as e:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        error_msg = f"❌ {timestamp}\n📞 Target: {phone_number}\nError: {str(e)}"
+        error_msg = f"❌ {timestamp}\n📞 Target: {phone_number}\nError: {str(e)[:200]}"
         await context.bot.send_message(chat_id=chat_id, text=error_msg)
 
 async def attack_task(phone_number: str, chat_id: int, context: CallbackContext):
@@ -116,7 +117,8 @@ async def attack_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_attacks[chat_id] = {
         'target': phone_number,
         'start_time': datetime.now(),
-        'task': None
+        'task': None,
+        'request_count': 0
     }
     
     await update.message.reply_text(
@@ -140,6 +142,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     target = active_attacks[chat_id]['target']
+    
+    # Cancel the task
+    if active_attacks[chat_id]['task']:
+        active_attacks[chat_id]['task'].cancel()
+    
     del active_attacks[chat_id]
     
     await update.message.reply_text(f"🛑 Attack stopped on: {target}")
@@ -151,12 +158,16 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in active_attacks:
         attack_info = active_attacks[chat_id]
         duration = datetime.now() - attack_info['start_time']
+        hours, remainder = divmod(duration.total_seconds(), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
         await update.message.reply_text(
             f"📊 Attack Status:\n"
             f"• Target: {attack_info['target']}\n"
-            f"• Running for: {duration}\n"
+            f"• Running for: {int(hours)}h {int(minutes)}m {int(seconds)}s\n"
             f"• Delay: {REQUEST_DELAY} seconds\n"
-            f"• Status: ⚡ ACTIVE"
+            f"• Status: ⚡ ACTIVE\n\n"
+            f"Use /stop to end attack"
         )
     else:
         await update.message.reply_text("📊 No active attack running.")
@@ -190,8 +201,17 @@ def cleanup_attacks():
         del active_attacks[chat_id]
     logger.info("All attacks stopped")
 
-async def main():
+def main():
     """Start the bot"""
+    # Check if BOT_TOKEN is set
+    if not BOT_TOKEN or BOT_TOKEN == "YOUR_ACTUAL_BOT_TOKEN_HERE":
+        logger.error("❌ ERROR: BOT_TOKEN is not set properly!")
+        print("❌ ERROR: Please set BOT_TOKEN environment variable or update the code")
+        print("On Heroku: heroku config:set BOT_TOKEN=your_token_here")
+        sys.exit(1)
+    
+    logger.info(f"Starting bot with token: {BOT_TOKEN[:10]}...")
+    
     # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -215,35 +235,8 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     
     # Start the bot
-    logger.info("Starting bot...")
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    
-    logger.info("Bot is running. Press Ctrl+C to stop.")
-    
-    # Keep running
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        # Clean shutdown
-        cleanup_attacks()
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
+    logger.info("Bot is starting...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    # ⚠️ IMPORTANT: Replace with your actual bot token
-    # Get from @BotFather on Telegram
-    BOT_TOKEN = "YOUR_ACTUAL_BOT_TOKEN_HERE"
-    
-    if BOT_TOKEN == "YOUR_ACTUAL_BOT_TOKEN_HERE":
-        print("❌ ERROR: Please replace BOT_TOKEN with your actual bot token!")
-        print("Get token from @BotFather on Telegram")
-        sys.exit(1)
-    
-    # Run the bot
-    asyncio.run(main())
+    main()
